@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>Count Checker v8 · Store 1257</title>
+<title>Count Checker v9 · Store 1257</title>
 <style>
   :root{
     --bg:#101418; --card:#1a2027; --card2:#151a20; --line:#2a323c;
@@ -74,7 +74,12 @@
   .scanTop{position:absolute;top:0;left:0;right:0;display:flex;justify-content:space-between;align-items:center;padding:14px;background:linear-gradient(#000c,#0000);z-index:2}
   .scanTop .tally{font:800 16px var(--mono);color:#fff}
   .scanDone{background:var(--blue);color:#08131f;border:0;border-radius:11px;padding:12px 18px;font:700 15px -apple-system,sans-serif}
-  .reticle{position:absolute;top:38%;left:10%;right:10%;height:22%;border:2px solid #ffffff88;border-radius:14px;z-index:1;pointer-events:none}
+  .reticle{position:absolute;top:41%;left:7%;right:7%;height:17%;border:2.5px solid #fff;border-radius:12px;z-index:1;pointer-events:none;box-shadow:0 0 0 2000px rgba(0,0,0,.45)}
+  .reticle.hit{border-color:var(--green)}
+  .reticle:after{content:'';position:absolute;left:6%;right:6%;top:50%;height:2px;background:#ff5d5588;border-radius:2px}
+  .camCtls{position:absolute;left:0;right:0;bottom:110px;display:flex;justify-content:center;gap:10px;z-index:2}
+  .camBtn2{background:#101418dd;border:1px solid var(--line);color:#fff;border-radius:24px;padding:12px 16px;font:600 14px -apple-system,sans-serif;min-width:54px}
+  .camBtn2.on{border-color:#ffb454;color:#ffb454}
   #scanStatus{position:absolute;left:10px;right:10px;bottom:16px;z-index:2;border-radius:14px;padding:14px;background:#101418ee;border:1px solid var(--line);min-height:64px}
   #scanStatus .big{font:700 15px -apple-system,sans-serif}
   #scanStatus .sub{font:12.5px -apple-system,sans-serif;color:var(--dim);margin-top:3px}
@@ -420,37 +425,92 @@ function onScan(code){
   document.getElementById('scanTally').textContent = camScans.size+' items · '+units+' units';
 }
 
+let decodeTimer=null, mfReader=null, videoTrack=null, cropCanvas=null;
+
+function buildCtls(){
+  const box=document.getElementById('camCtls');
+  box.innerHTML='';
+  if(!videoTrack || !videoTrack.getCapabilities) return;
+  let caps={}; try{ caps=videoTrack.getCapabilities(); }catch(_){}
+  if(caps.torch){
+    const b=document.createElement('button'); b.className='camBtn2'; b.textContent='🔦 Light';
+    let on=false;
+    b.onclick=async()=>{ on=!on; try{ await videoTrack.applyConstraints({advanced:[{torch:on}]}); b.classList.toggle('on',on);}catch(_){ b.textContent='🔦 n/a'; } };
+    box.appendChild(b);
+  }
+  if(caps.zoom && caps.zoom.max>1){
+    const zooms=[1, Math.min(2,caps.zoom.max), Math.min(3,caps.zoom.max)].filter((v,i,a)=>a.indexOf(v)===i);
+    zooms.forEach(z=>{
+      const b=document.createElement('button'); b.className='camBtn2'; b.textContent=z+'x';
+      if(z===1) b.classList.add('on');
+      b.onclick=async()=>{ try{ await videoTrack.applyConstraints({advanced:[{zoom:z}]}); box.querySelectorAll('.camBtn2').forEach(x=>{ if(/x$/.test(x.textContent)) x.classList.remove('on'); }); b.classList.add('on'); }catch(_){} };
+      box.appendChild(b);
+    });
+  }
+}
+
+function decodeTick(){
+  const video=document.getElementById('scanVideo');
+  if(!camActive || video.readyState<2) return;
+  const vw=video.videoWidth, vh=video.videoHeight;
+  if(!vw) return;
+  // crop = the reticle band: central 86% width, 17% height band at 41% down (of the DISPLAYED area);
+  // video uses object-fit:cover, so map display region to source pixels
+  const dispW=video.clientWidth, dispH=video.clientHeight;
+  const scale=Math.max(dispW/vw, dispH/vh);
+  const visW=dispW/scale, visH=dispH/scale;           // visible source region
+  const offX=(vw-visW)/2, offY=(vh-visH)/2;
+  const sx=offX+visW*0.07, sw=visW*0.86;
+  const sy=offY+visH*0.41, sh=visH*0.17;
+  if(!cropCanvas) cropCanvas=document.createElement('canvas');
+  const targetW=Math.min(800, sw|0);
+  cropCanvas.width=targetW; cropCanvas.height=(sh*targetW/sw)|0;
+  const ctx=cropCanvas.getContext('2d',{willReadFrequently:true});
+  ctx.drawImage(video, sx,sy,sw,sh, 0,0,cropCanvas.width,cropCanvas.height);
+  try{
+    const src=new ZXing.HTMLCanvasElementLuminanceSource(cropCanvas);
+    const bmp=new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(src));
+    const res=mfReader.decode(bmp);
+    if(res){
+      const ret=document.querySelector('.reticle');
+      ret.classList.add('hit'); setTimeout(()=>ret.classList.remove('hit'),350);
+      onScan(res.getText());
+    }
+  }catch(e){ /* NotFound each frame is normal */ }
+  finally{ try{ mfReader.reset(); }catch(_){} }
+}
+
 async function startCam(){
   const overlay=document.getElementById('scanOverlay');
   document.getElementById('scanDone').onclick = stopCam;
   overlay.classList.add('open');
   const video=document.getElementById('scanVideo');
   try{
-    camStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment', width:{ideal:1920}}});
+    camStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment', width:{ideal:1920}, height:{ideal:1080}}});
     video.srcObject = camStream; await video.play();
+    videoTrack = camStream.getVideoTracks()[0];
+    try{ await videoTrack.applyConstraints({advanced:[{focusMode:'continuous'}]}); }catch(_){}
+    buildCtls();
     camActive=true;
-    if('BarcodeDetector' in window){
-      const det = new BarcodeDetector({formats:['ean_13','upc_a','upc_e','ean_8','code_128']});
-      const loop = async ()=>{
-        if(!camActive) return;
-        try{ const codes = await det.detect(video); if(codes.length) onScan(codes[0].rawValue); }catch(_){}
-        requestAnimationFrame(loop);
-      };
-      loop();
-    } else if(typeof ZXing!=='undefined'){
-      zreader = new ZXing.BrowserMultiFormatReader();
-      zreader.decodeFromStream(camStream, video, (res,err)=>{ if(res) onScan(res.getText()); });
+    if(typeof ZXing!=='undefined'){
+      mfReader = new ZXing.MultiFormatReader();
+      const hints=new Map();
+      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[ZXing.BarcodeFormat.EAN_13,ZXing.BarcodeFormat.UPC_A,ZXing.BarcodeFormat.UPC_E,ZXing.BarcodeFormat.EAN_8,ZXing.BarcodeFormat.CODE_128]);
+      hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
+      mfReader.setHints(hints);
+      decodeTimer=setInterval(decodeTick, 130);
     } else {
-      document.getElementById('scanStatus').innerHTML='<div class="big">Scanner library unavailable</div><div class="sub">Unexpected — the scanner is built in. Refresh the page; Orca + upload also works.</div>';
+      document.getElementById('scanStatus').innerHTML='<div class="big">Scanner engine missing</div><div class="sub">Refresh the page. Orca + upload also works.</div>';
     }
   }catch(e){
-    document.getElementById('scanStatus').innerHTML='<div class="big">Camera blocked</div><div class="sub">'+e.name+' — if this is inside the Claude app preview, open the file in Safari/Chrome instead. Orca + upload still works.</div>';
+    document.getElementById('scanStatus').innerHTML='<div class="big">Camera blocked</div><div class="sub">'+e.name+' — open this page in Safari (not an in-app preview) and allow camera.</div>';
   }
 }
 function stopCam(){
   camActive=false;
   document.getElementById('scanOverlay').classList.remove('open');
-  if(zreader){ try{zreader.reset();}catch(_){} zreader=null; }
+  if(decodeTimer){ clearInterval(decodeTimer); decodeTimer=null; }
+  mfReader=null; videoTrack=null;
   try{ if(camStream){ camStream.getTracks().forEach(t=>t.stop()); camStream=null; } }catch(_){}
   if(camScans.size){
     const lines=[...camScans].map(([c,q])=>c+','+q).join('\n');
@@ -469,7 +529,8 @@ document.getElementById('dbchip').textContent = 'Mens + Womens apparel · '+ITEM
   </div>
   <div class="reticle"></div>
   <video id="scanVideo" playsinline muted></video>
-  <div id="scanStatus"><div class="big">Point at a barcode…</div><div class="sub">UPC tags on the hangtag. Hold steady ~6 inches away.</div></div>
+  <div class="camCtls" id="camCtls"></div>
+  <div id="scanStatus"><div class="big">Point at a barcode…</div><div class="sub">Line the barcode up inside the box. Light + zoom buttons appear below if your phone supports them.</div></div>
 </div>
 </body>
 </html>
