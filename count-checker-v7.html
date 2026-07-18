@@ -422,6 +422,7 @@ function onScan(code){
 
 async function startCam(){
   const overlay=document.getElementById('scanOverlay');
+  document.getElementById('scanDone').onclick = stopCam;
   overlay.classList.add('open');
   const video=document.getElementById('scanVideo');
   try{
@@ -448,9 +449,9 @@ async function startCam(){
 }
 function stopCam(){
   camActive=false;
-  if(zreader){ try{zreader.reset();}catch(_){} zreader=null; }
-  if(camStream){ camStream.getTracks().forEach(t=>t.stop()); camStream=null; }
   document.getElementById('scanOverlay').classList.remove('open');
+  if(zreader){ try{zreader.reset();}catch(_){} zreader=null; }
+  try{ if(camStream){ camStream.getTracks().forEach(t=>t.stop()); camStream=null; } }catch(_){}
   if(camScans.size){
     const lines=[...camScans].map(([c,q])=>c+','+q).join('\n');
     document.getElementById('input').value = 'Barcode,Quantity\n'+lines;
@@ -458,7 +459,6 @@ function stopCam(){
   }
 }
 document.getElementById('camBtn').onclick = startCam;
-document.getElementById('scanDone').onclick = stopCam;
 
 document.getElementById('dbchip').textContent = 'Mens + Womens apparel · '+ITEMS.length+' SKUs ('+ITEMS.filter(x=>x[4]).length+' clearance-priced)';
 </script>
