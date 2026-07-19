@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>Count Checker v12 · Store 1257</title>
+<title>Count Checker v13 · Store 1257</title>
 <style>
   :root{
     --bg:#101418; --card:#1a2027; --card2:#151a20; --line:#2a323c;
@@ -86,6 +86,11 @@
   #scanStatus.ok{border-color:#1d5c3c} #scanStatus.ok .big{color:var(--green)}
   #scanStatus.bad{border-color:#6b2320} #scanStatus.bad .big{color:var(--red)}
   #scanStatus.move{border-color:#274d75} #scanStatus.move .big{color:var(--blue)}
+  #scanStatus .huge{font:800 34px var(--mono);letter-spacing:.5px}
+  #scanStatus .grp{display:inline-block;font:800 15px var(--mono);background:#12283f;color:var(--blue);border-radius:8px;padding:4px 10px;margin-left:10px;vertical-align:6px}
+  .t-purple .head h3{color:#c792ea} .t-purple .badge{background:#2a1f3d;color:#c792ea}
+  .grpHead{font:800 14px var(--mono);padding:12px 14px 4px}
+  .grpHead .price{font-size:18px}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>/* ZXing 0.21.3 inlined */
@@ -130,7 +135,8 @@
     <h2>Your scans</h2>
     <textarea id="input" placeholder="Paste barcodes — one per line, or the whole Orca CSV export. Duplicates count as quantity.&#10;&#10;1180555004&#10;1180555004&#10;1040932003"></textarea>
     <div class="row">
-      <button class="primary" id="camBtn" style="background:var(--green);">📷 Scan with camera</button>
+      <button class="primary" id="camBtn" style="background:var(--green);">📷 Count mode</button>
+      <button class="primary" id="retagBtn" style="background:#c792ea;">🏷 Retag mode</button>
     </div>
     <div class="row">
       <label class="filebtn ghost" for="file">Upload CSV / Excel</label>
@@ -171,6 +177,13 @@
   </div>
 
   <p class="note" id="parseNote"></p>
+
+  <div class="ticket t-purple" id="tRetag">
+    <div class="head"><h3>RETAG GROUPS — SET PRICE ONCE PER GROUP</h3><span class="badge" id="bRetag">0</span></div>
+    <div class="hint">Prices come from the loaded export — upload a fresh one the same day for retag accuracy. "?" group needs the gun.</div>
+    <div id="lRetag"></div>
+    <div class="foot"><button class="copybtn" id="copyRetag">Copy retag list</button></div>
+  </div>
 
   <div class="panel">
     <h2>Stock data</h2>
@@ -378,6 +391,57 @@ document.getElementById('copyRed').onclick = async ()=>{
   catch(_){ const ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); btn.textContent='Copied ✓'; }
   setTimeout(()=>btn.textContent='Copy fix list',1600);
 };
+function handleRetag(code){
+  lastCode=code; lastAt=Date.now();
+  try{ navigator.vibrate && navigator.vibrate(60); }catch(_){}
+  const idx = matchCode(code);
+  const price = idx>=0 ? ITEMS[idx][3] : null;
+  const key = price==null ? '?' : price.toFixed(2);
+  let g = retagGroups.get(key);
+  const isNew = !g;
+  if(isNew){
+    g = {letter: key==='?' ? '?' : GRP_LETTERS[[...retagGroups.keys()].filter(k=>k!=='?').length] || '+', items:[]};
+    retagGroups.set(key,g);
+  }
+  retagList.push({pos:retagList.length+1, code, idx, price});
+  g.items.push({idx, code});
+  const st=document.getElementById('scanStatus');
+  if(price==null){
+    st.className='bad';
+    st.innerHTML='<div class="huge">? Not on file</div><div class="sub">'+code+' — set aside, needs the gun.</div>';
+    beep('bad');
+  } else {
+    st.className = isNew ? 'move' : 'ok';
+    const it=ITEMS[idx];
+    st.innerHTML='<div class="huge">$'+key+'<span class="grp">GROUP '+g.letter+'</span></div>'+
+      '<div class="sub">'+it[1]+' · shirt '+g.items.length+' in this group — hang with group '+g.letter+
+      (isNew?' (NEW group)':'')+'</div>';
+    beep(isNew?'move':'ok');
+  }
+  document.getElementById('scanTally').textContent = retagList.length+' shirts · '+retagGroups.size+' groups';
+}
+function renderRetag(){
+  const t=document.getElementById('tRetag');
+  const box=document.getElementById('lRetag');
+  const entries=[...retagGroups.entries()].sort((a,b)=>{
+    if(a[0]==='?') return 1; if(b[0]==='?') return -1;
+    return parseFloat(b[0])-parseFloat(a[0]);
+  });
+  document.getElementById('bRetag').textContent = retagList.length;
+  box.innerHTML = entries.map(([key,g])=>{
+    const head = key==='?'
+      ? '<div class="grpHead">GROUP ? — not on file ('+g.items.length+') — use the gun</div>'
+      : '<div class="grpHead">GROUP '+g.letter+' — <span class="price">$'+key+'</span> × '+g.items.length+'</div>';
+    const rows = '<ul class="items">'+g.items.map(x=>'<li><div><span class="code">'+(x.idx>=0?ITEMS[x.idx][0]:esc(x.code))+'</span><div class="desc">'+(x.idx>=0?esc(ITEMS[x.idx][1]):'unknown item')+'</div></div></li>').join('')+'</ul>';
+    return head+rows;
+  }).join('');
+  t.style.display='block';
+  window._retagText = entries.map(([key,g])=>
+    (key==='?'?'GUN NEEDED':'$'+key)+' x'+g.items.length+':\n'+g.items.map(x=>'  '+(x.idx>=0?ITEMS[x.idx][1]:x.code)).join('\n')
+  ).join('\n\n');
+  t.scrollIntoView({behavior:'smooth'});
+}
+
 /* ===== Data manager ===== */
 const EMBED = {items: ITEMS, index: INDEX, label: 'built-in export (Jul 17)'};
 function normDigits(s){ return String(s||'').replace(/\D/g,'').replace(/^0+/,''); }
@@ -475,6 +539,10 @@ document.getElementById('dataReset').onclick = ()=>{
 };
 /* ===== Camera scanning ===== */
 const camScans = new Map();   // raw code -> qty
+let scanMode='count';
+let retagList=[];                 // {pos, code, idx, price}
+let retagGroups=new Map();        // priceKey -> {letter, items:[]}
+const GRP_LETTERS='ABCDEFGHJKLMNPQRSTUVWXYZ';
 let staleTimer=null;
 function armStale(){
   if(staleTimer) clearTimeout(staleTimer);
@@ -504,6 +572,7 @@ function onScan(code){
   if(now-(onScan.anyAt||0) < 700) return;
   if(code===lastCode && now-lastAt < 2000) return;
   onScan.anyAt = now;
+  if(scanMode==='retag') return handleRetag(code);
   lastCode=code; lastAt=now;
   try{ navigator.vibrate && navigator.vibrate(60); }catch(_){}
   camScans.set(code,(camScans.get(code)||0)+1);
@@ -636,6 +705,7 @@ async function startCam(){
   const overlay=document.getElementById('scanOverlay');
   document.getElementById('scanDone').onclick = stopCam;
   overlay.classList.add('open');
+  document.getElementById('scanTally').textContent = scanMode==='retag' ? '0 shirts · 0 groups' : (camScans.size+' items');
   const video=document.getElementById('scanVideo');
   try{
     camStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment', width:{ideal:1920}, height:{ideal:1080}}});
@@ -664,13 +734,21 @@ function stopCam(){
   if(decodeTimer){ clearInterval(decodeTimer); decodeTimer=null; }
   mfReader=null; videoTrack=null;
   try{ if(camStream){ camStream.getTracks().forEach(t=>t.stop()); camStream=null; } }catch(_){}
-  if(camScans.size){
+  if(scanMode==='retag'){
+    if(retagList.length) renderRetag();
+  } else if(camScans.size){
     const lines=[...camScans].map(([c,q])=>c+','+q).join('\n');
     document.getElementById('input').value = 'Barcode,Quantity\n'+lines;
     run();
   }
 }
-document.getElementById('camBtn').onclick = startCam;
+document.getElementById('camBtn').onclick = ()=>{ scanMode='count'; startCam(); };
+document.getElementById('retagBtn').onclick = ()=>{ scanMode='retag'; retagList=[]; retagGroups=new Map(); startCam(); };
+document.getElementById('copyRetag').onclick = async ()=>{
+  const btn=document.getElementById('copyRetag');
+  try{ await navigator.clipboard.writeText(window._retagText||''); btn.textContent='Copied ✓'; }catch(_){}
+  setTimeout(()=>btn.textContent='Copy retag list',1600);
+};
 
 updateDataInfo(EMBED.label);
 (function loadSaved(){
