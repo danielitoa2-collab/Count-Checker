@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>Count Checker v11 · Store 1257</title>
+<title>Count Checker v12 · Store 1257</title>
 <style>
   :root{
     --bg:#101418; --card:#1a2027; --card2:#151a20; --line:#2a323c;
@@ -395,6 +395,7 @@ function applyData(items, index, label, persist){
       localStorage.setItem('ccItems', JSON.stringify(items));
       localStorage.setItem('ccIndex', JSON.stringify(index));
       localStorage.setItem('ccMeta', JSON.stringify({label, at: Date.now()}));
+      document.getElementById('dataInfo').textContent += ' ✓ saved — survives closing the app.';
     }catch(e){ document.getElementById('dataInfo').textContent += ' (Too large to save on-device; active this session only.)'; }
   }
 }
@@ -472,13 +473,6 @@ document.getElementById('dataReset').onclick = ()=>{
   try{ localStorage.removeItem('ccItems'); localStorage.removeItem('ccIndex'); localStorage.removeItem('ccMeta'); }catch(_){}
   applyData(EMBED.items, EMBED.index, EMBED.label, false);
 };
-(function loadSaved(){
-  try{
-    const it=localStorage.getItem('ccItems'), ix=localStorage.getItem('ccIndex'), m=localStorage.getItem('ccMeta');
-    if(it && ix && m){ const meta=JSON.parse(m); applyData(JSON.parse(it), JSON.parse(ix), meta.label+' (saved)', false); }
-  }catch(_){}
-})();
-
 /* ===== Camera scanning ===== */
 const camScans = new Map();   // raw code -> qty
 let staleTimer=null;
@@ -507,7 +501,9 @@ function beep(kind){
 
 function onScan(code){
   const now = Date.now();
-  if(code===lastCode && now-lastAt < 1100) return;   // debounce double-reads
+  if(now-(onScan.anyAt||0) < 700) return;
+  if(code===lastCode && now-lastAt < 2000) return;
+  onScan.anyAt = now;
   lastCode=code; lastAt=now;
   try{ navigator.vibrate && navigator.vibrate(60); }catch(_){}
   camScans.set(code,(camScans.get(code)||0)+1);
@@ -620,10 +616,18 @@ function decodeTick(){
   }
   try{
     if(res){
-      const ret=document.querySelector('.reticle');
-      ret.classList.add('hit'); setTimeout(()=>ret.classList.remove('hit'),350);
-      onScan(res.getText());
-    }
+      const code=res.getText();
+      const digits=String(code).replace(/\D/g,'');
+      if(digits.length>=10){
+        if(decodeTick.pend===code){ decodeTick.pendN++; } else { decodeTick.pend=code; decodeTick.pendN=1; }
+        if(decodeTick.pendN>=2){
+          decodeTick.pend=null; decodeTick.pendN=0;
+          const ret=document.querySelector('.reticle');
+          ret.classList.add('hit'); setTimeout(()=>ret.classList.remove('hit'),350);
+          onScan(code);
+        }
+      }
+    } else { decodeTick.pendN=0; }
   }catch(e){}
   finally{ decodeTick.busy=false; }
 }
@@ -643,7 +647,7 @@ async function startCam(){
     if(typeof ZXing!=='undefined'){
       mfReader = new ZXing.MultiFormatReader();
       const hints=new Map();
-      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[ZXing.BarcodeFormat.EAN_13,ZXing.BarcodeFormat.UPC_A,ZXing.BarcodeFormat.UPC_E,ZXing.BarcodeFormat.EAN_8,ZXing.BarcodeFormat.CODE_128,ZXing.BarcodeFormat.CODE_39,ZXing.BarcodeFormat.ITF]);
+      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[ZXing.BarcodeFormat.EAN_13,ZXing.BarcodeFormat.UPC_A,ZXing.BarcodeFormat.CODE_128]);
       hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
       mfReader.setHints(hints);
       decodeTimer=setInterval(decodeTick, 110);
@@ -669,6 +673,16 @@ function stopCam(){
 document.getElementById('camBtn').onclick = startCam;
 
 updateDataInfo(EMBED.label);
+(function loadSaved(){
+  try{
+    const it=localStorage.getItem('ccItems'), ix=localStorage.getItem('ccIndex'), m=localStorage.getItem('ccMeta');
+    if(it && ix && m){
+      const meta=JSON.parse(m);
+      applyData(JSON.parse(it), JSON.parse(ix), meta.label, false);
+      document.getElementById('dataInfo').textContent += ' ✓ restored from this phone.';
+    }
+  }catch(_){}
+})();
 </script>
 <div id="scanOverlay">
   <div class="scanTop">
